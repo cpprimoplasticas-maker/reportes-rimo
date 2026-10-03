@@ -1,9 +1,8 @@
 import streamlit as st
 from google import genai
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 import urllib.parse
 import time
-import io
 
 st.set_page_config(page_title="Reporte de Turno RIMO", layout="wide")
 
@@ -16,45 +15,6 @@ def optimizar_imagen(imagen_uploaded, max_size=(1024, 1024)):
     img = Image.open(imagen_uploaded)
     img.thumbnail(max_size)
     return img
-
-def texto_a_imagen(texto_markdown):
-    """Convierte el reporte Markdown en una imagen PNG limpia de forma segura."""
-    ancho = 800
-    color_fondo = (255, 255, 255)
-    color_texto = (0, 0, 0)
-    margen = 30
-    
-    # Cargar fuente básica
-    font = ImageFont.load_default()
-
-    lineas = texto_markdown.split('\n')
-    lineas_procesadas = []
-
-    for linea in lineas:
-        linea_limpia = linea.replace('**', '').replace('*', '')
-        # Divide frases muy largas en varias líneas
-        while len(linea_limpia) > 80:
-            corte = linea_limpia[:80].rfind(' ')
-            if corte == -1: 
-                corte = 80
-            lineas_procesadas.append(linea_limpia[:corte])
-            linea_limpia = linea_limpia[corte:].lstrip()
-        lineas_procesadas.append(linea_limpia)
-
-    alto_linea = 22
-    alto_final = max(300, (len(lineas_procesadas) * alto_linea) + (2 * margen))
-    
-    img_final = Image.new('RGB', (ancho, alto_final), color_fondo)
-    draw = ImageDraw.Draw(img_final)
-    
-    y = margen
-    for text_line in lineas_procesadas:
-        draw.text((margen, y), text_line, font=font, fill=color_texto)
-        y += alto_linea
-        
-    img_bytes = io.BytesIO()
-    img_final.save(img_bytes, format='PNG')
-    return img_bytes.getvalue()
 
 # --- INTERFAZ DE LA APP ---
 
@@ -143,31 +103,61 @@ if foto_final:
                 
                 if response:
                     st.session_state["reporte_texto"] = response.text
-                    try:
-                        st.session_state["reporte_imagen"] = texto_a_imagen(response.text)
-                    except Exception as img_err:
-                        st.warning("No se pudo generar la imagen del reporte, pero aquí está el texto.")
                     st.rerun()
                 
             except Exception as e:
                 st.error(f"Ocurrió un error al procesar el reporte: {e}")
 
-# 4. Mostrar reporte generado y opciones de compartir
+# 4. Mostrar reporte generado en tarjeta HTML estilizada y WhatsApp
 if "reporte_texto" in st.session_state:
     st.markdown("---")
     st.subheader("📊 Reporte Final Generado:")
     
-    # Muestra el texto Markdown formateado en la app
-    st.markdown(st.session_state["reporte_texto"])
+    # Renderizado dentro de una tarjeta HTML/CSS limpia
+    st.markdown(
+        f"""
+        <div style="
+            background-color: #FFFFFF; 
+            padding: 24px; 
+            border-radius: 12px; 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            color: #0F172A;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            border: 1px solid #E2E8F0;
+            margin-bottom: 20px;
+        ">
+            {st.session_state["reporte_texto"]}
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
-    # Opción de descargar imagen si se pudo generar
-    if "reporte_imagen" in st.session_state:
-        st.markdown("---")
-        st.subheader("🖼️ Guardar para WhatsApp:")
-        st.image(st.session_state["reporte_imagen"], caption="Vista previa en formato imagen", use_container_width=True)
-        st.download_button(
-            label="⬇️ Descargar Imagen del Reporte",
-            data=st.session_state["reporte_imagen"],
-            file_name="reporte_turno_rimo.png",
-            mime="image/png"
-        )
+    # Botón para compartir directo a WhatsApp
+    texto_encoded = urllib.parse.quote(st.session_state["reporte_texto"])
+    whatsapp_url = f"https://api.whatsapp.com/send?text={texto_encoded}"
+    
+    st.markdown("---")
+    st.subheader("📲 Compartir Reporte:")
+    st.markdown(
+        f'''
+        <a href="{whatsapp_url}" target="_blank" style="text-decoration: none;">
+            <button style="
+                background-color: #25D366;
+                color: white;
+                border: none;
+                padding: 14px 24px;
+                font-size: 16px;
+                font-weight: bold;
+                border-radius: 8px;
+                cursor: pointer;
+                width: 100%;
+                text-align: center;
+                display: block;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            ">
+                📲 Compartir Reporte por WhatsApp
+            </button>
+        </a>
+        ''',
+        unsafe_allow_html=True
+    )
