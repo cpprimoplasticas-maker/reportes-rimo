@@ -24,9 +24,9 @@ if foto_final:
             api_key = st.secrets["GEMINI_API_KEY"]
             client = genai.Client(api_key=api_key)
             
-            # Cambio de modelo para solucionar el error 404
+            # Modelo actualizado según requerimiento de la API
             response = client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-3.8-flash",
                 contents=[imagen, "Analiza esta imagen y genera un resumen ejecutivo para el reporte de turno."]
             )
             
