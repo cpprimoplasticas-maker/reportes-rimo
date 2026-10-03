@@ -2,6 +2,7 @@ import streamlit as st
 from google import genai
 from PIL import Image
 import urllib.parse
+import time
 
 st.set_page_config(page_title="Reporte de Turno RIMO", layout="wide")
 
@@ -17,9 +18,8 @@ foto_camara = st.camera_input("O tomar foto con la cámara del celular")
 
 foto_final = foto_galeria if foto_galeria is not None else foto_camara
 
-# 2. Formulario para novedades y estado de máquinas
+# 2. Formulario para novedades
 st.subheader("2. Registro de Novedades por Máquina")
-
 col1, col2 = st.columns(2)
 
 with col1:
@@ -27,21 +27,19 @@ with col1:
         "Máquinas Paradas / Fuera de Servicio:",
         placeholder="Ejemplo: W320 (Daño en molde), T650 (Sin material)"
     )
-    
     novedades_calidad = st.text_area(
         "Novedades de Calidad / Rechazos:",
-        placeholder="Ejemplo: Rebabas en producto de máquina W880-2 durante las primeras 2 horas."
+        placeholder="Ejemplo: Rebabas en producto de máquina W880-2."
     )
 
 with col2:
     novedades_mantenimiento = st.text_area(
         "Novedades de Mantenimiento / Servicios:",
-        placeholder="Ejemplo: Fuga de aceite en unidad de inyección máquina W1600."
+        placeholder="Ejemplo: Fuga de aceite en unidad de inyección W1600."
     )
-    
     observaciones_generales = st.text_area(
         "Observaciones Generales del Turno:",
-        placeholder="Ejemplo: Cambio de turno realizado a tiempo. Sin faltantes de personal."
+        placeholder="Ejemplo: Cambio de turno realizado a tiempo."
     )
 
 # 3. Procesar foto y generar reporte
@@ -51,11 +49,13 @@ if foto_final:
     if st.button("🚀 Generar Tabla de Reporte", type="primary"):
         with st.spinner("Analizando la imagen y procesando el reporte..."):
             try:
+                # Reducir tamaño de foto para acelerar y ahorrar cuota
                 imagen = Image.open(foto_final)
+                imagen.thumbnail((1024, 1024))
+                
                 api_key = st.secrets["GEMINI_API_KEY"]
                 client = genai.Client(api_key=api_key)
                 
-                # Consolidar novedades ingresadas por el usuario
                 novedades_texto = f"""
                 * Máquinas Paradas: {maquinas_paradas if maquinas_paradas else 'Ninguna'}
                 * Novedades de Calidad: {novedades_calidad if novedades_calidad else 'Sin novedades'}
@@ -63,7 +63,6 @@ if foto_final:
                 * Observaciones Generales: {observaciones_generales if observaciones_generales else 'Sin observaciones'}
                 """
                 
-                # Prompt estructurado para la IA
                 prompt_reporte = f"""
                 Analiza la imagen adjunta (planilla/pantalla de producción) y compón un reporte de turno claro en texto plano/Markdown.
 
@@ -80,30 +79,37 @@ if foto_final:
                 (Identifica las 2 o 3 máquinas con mayor desfase o faltante según la foto).
                 """
                 
-                response = client.models.generate_content(
-                    model="gemini-3.8-flash",
-                    contents=[imagen, prompt_reporte]
-                )
+                # Intentar hasta 3 veces si hay saturación temporal
+                response = None
+                for intento in range(3):
+                    try:
+                        response = client.models.generate_content(
+                            model="gemini-3.8-flash",
+                            contents=[imagen, prompt_reporte]
+                        )
+                        break
+                    except Exception as err:
+                        if ("429" in str(err) or "RESOURCE_EXHAUSTED" in str(err)) and intento < 2:
+                            time.sleep(3 * (intento + 1))  # Esperar 3s la primera vez, 6s la segunda
+                        else:
+                            raise err
                 
-                reporte_resultado = response.text
-                
-                # Guardar el resultado en la sesión
-                st.session_state["reporte_texto"] = reporte_resultado
+                if response:
+                    st.session_state["reporte_texto"] = response.text
                 
             except Exception as e:
                 err_str = str(e)
                 if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                    st.error("⚠️ Se alcanzó la cuota temporal de la API. Espera 1 minuto antes de reintentar.")
+                    st.warning("⚠️ Servidores ocupados. Por favor espera **30 segundos** y presiona el botón de nuevo.")
                 else:
                     st.error(f"Ocurrió un error al procesar el reporte: {e}")
 
-# 4. Mostrar reporte generado y botón de compartir por WhatsApp
+# 4. Mostrar reporte y botón de WhatsApp
 if "reporte_texto" in st.session_state:
     st.markdown("---")
     st.subheader("📊 Reporte Final Generado:")
     st.markdown(st.session_state["reporte_texto"])
     
-    # Preparar el enlace de WhatsApp
     texto_encoded = urllib.parse.quote(st.session_state["reporte_texto"])
     whatsapp_url = f"https://api.whatsapp.com/send?text={texto_encoded}"
     
