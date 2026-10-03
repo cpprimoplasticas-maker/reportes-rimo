@@ -1,12 +1,98 @@
 import streamlit as st
 from google import genai
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import urllib.parse
 import time
+import io
 
 st.set_page_config(page_title="Reporte de Turno RIMO", layout="wide")
 
 st.title("📋 Generador de Reportes de Turno - RIMO")
+
+# --- FUNCIONES DE UTILIDAD ---
+
+def optimizar_imagen(imagen_uploaded, max_size=(1024, 1024)):
+    """Reduce el tamaño de la imagen para ahorrar cuota de API."""
+    img = Image.open(imagen_uploaded)
+    img.thumbnail(max_size)
+    return img
+
+def texto_a_imagen(texto_markdown):
+    """Convierte el reporte Markdown en una imagen limpia para compartir."""
+    # Configuración de la imagen de salida
+    ancho = 800
+    alto_inicial = 2000 # Ajustable automáticamente
+    color_fondo = (255, 255, 255) # Blanco
+    color_texto = (0, 0, 0) # Negro
+    margen = 40
+    
+    # Intentar cargar una fuente legible (arial o similar)
+    try:
+        font = ImageFont.truetype("arial.ttf", 20)
+        font_bold = ImageFont.truetype("arialbd.ttf", 22)
+    except IOError:
+        font = ImageFont.load_default()
+        font_bold = font
+
+    # Crear una imagen temporal para calcular el alto necesario
+    img_temp = Image.new('RGB', (ancho, alto_inicial), color_fondo)
+    draw_temp = ImageDraw.Draw(img_temp)
+    
+    lineas = texto_markdown.split('\n')
+    y_text = margen
+    
+    # Calcular alto total
+    for linea in lineas:
+        # Detectar títulos o negritas simples (**texto**)
+        es_negrita = linea.startswith('**') or linea.startswith('📌') or linea.startswith('📊') or linea.startswith('⚠️') or linea.startswith('🚨')
+        fuente_usar = font_bold if es_negrita else font
+        linea_limpia = linea.replace('**', '')
+        
+        # Envolver texto largo
+        palabras = linea_limpia.split(' ')
+        linea_actual = ''
+        for palabra in palabras:
+            test_linea = linea_actual + palabra + ' '
+            width, height = draw_temp.textsize(test_linea, font=fuente_usar)
+            if width < (ancho - 2 * margen):
+                linea_actual = test_linea
+            else:
+                y_text += height + 5
+                linea_actual = palabra + ' '
+        y_text += height + 5
+
+    # Crear la imagen final con el alto correcto
+    alto_final = y_text + margen
+    img_final = Image.new('RGB', (ancho, alto_final), color_fondo)
+    draw = ImageDraw.Draw(img_final)
+    
+    # Dibujar el texto
+    y_text = margen
+    for linea in lineas:
+        es_negrita = linea.startswith('**') or linea.startswith('📌') or linea.startswith('📊') or linea.startswith('⚠️') or linea.startswith('🚨')
+        fuente_usar = font_bold if es_negrita else font
+        linea_limpia = linea.replace('**', '')
+        
+        palabras = linea_limpia.split(' ')
+        linea_actual = ''
+        for palabra in palabras:
+            test_linea = linea_actual + palabra + ' '
+            width, height = draw.textsize(test_linea, font=fuente_usar)
+            if width < (ancho - 2 * margen):
+                linea_actual = test_linea
+            else:
+                draw.text((margen, y_text), linea_actual, font=fuente_usar, fill=color_texto)
+                y_text += height + 5
+                linea_actual = palabra + ' '
+        draw.text((margen, y_text), linea_actual, font=fuente_usar, fill=color_texto)
+        y_text += height + 5
+        
+    # Convertir a bytes para Streamlit
+    img_bytes = io.BytesIO()
+    img_final.save(img_bytes, format='PNG')
+    return img_bytes.getvalue()
+
+# --- INTERFAZ DE LA APP ---
 
 # 1. Cargar imagen desde cámara o galería
 st.subheader("1. Adjuntar Foto de Evidencia / Planilla")
@@ -49,9 +135,8 @@ if foto_final:
     if st.button("🚀 Generar Tabla de Reporte", type="primary"):
         with st.spinner("Analizando la imagen y procesando el reporte..."):
             try:
-                # Reducir tamaño de foto para acelerar y ahorrar cuota
-                imagen = Image.open(foto_final)
-                imagen.thumbnail((1024, 1024))
+                # Optimizar imagen antes de enviar
+                imagen = optimizar_imagen(foto_final)
                 
                 api_key = st.secrets["GEMINI_API_KEY"]
                 client = genai.Client(api_key=api_key)
@@ -70,7 +155,7 @@ if foto_final:
                 📌 *REPORTE DE TURNO - RIMO*
 
                 📊 *RESUMEN DE PRODUCCIÓN:*
-                (Genera la tabla con: Centro/Máquina, Orden, Referencia, Unds Producidas, Unds Programadas, Faltantes).
+                (Genera la tabla con las columnas: Centro/Máquina, Orden, Referencia, Unds Producidas, Unds Programadas, Faltantes. Extrae TODOS los datos de la foto).
 
                 ⚠️ *NOVEDADES Y ESTADO DE MÁQUINAS:*
                 {novedades_texto}
@@ -79,7 +164,7 @@ if foto_final:
                 (Identifica las 2 o 3 máquinas con mayor desfase o faltante según la foto).
                 """
                 
-                # Intentar hasta 3 veces si hay saturación temporal
+                # Bucle de reintentos (429)
                 response = None
                 for intento in range(3):
                     try:
@@ -90,48 +175,57 @@ if foto_final:
                         break
                     except Exception as err:
                         if ("429" in str(err) or "RESOURCE_EXHAUSTED" in str(err)) and intento < 2:
-                            time.sleep(3 * (intento + 1))  # Esperar 3s la primera vez, 6s la segunda
+                            time.sleep(3 * (intento + 1))
                         else:
                             raise err
                 
                 if response:
+                    # Guardar texto del reporte y generar la imagen
                     st.session_state["reporte_texto"] = response.text
+                    with st.spinner("🔢 Convirtiendo el reporte a imagen..."):
+                        st.session_state["reporte_imagen"] = texto_a_imagen(response.text)
+                    st.rerun()
                 
             except Exception as e:
-                err_str = str(e)
-                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                    st.warning("⚠️ Servidores ocupados. Por favor espera **30 segundos** y presiona el botón de nuevo.")
-                else:
-                    st.error(f"Ocurrió un error al procesar el reporte: {e}")
+                st.error(f"Ocurrió un error al procesar el reporte: {e}")
 
-# 4. Mostrar reporte y botón de WhatsApp
+# 4. Mostrar reporte generado y botón de compartir
 if "reporte_texto" in st.session_state:
     st.markdown("---")
     st.subheader("📊 Reporte Final Generado:")
-    st.markdown(st.session_state["reporte_texto"])
     
-    texto_encoded = urllib.parse.quote(st.session_state["reporte_texto"])
-    whatsapp_url = f"https://api.whatsapp.com/send?text={texto_encoded}"
+    # Mostrar la imagen del reporte (así se verá en WhatsApp)
+    st.image(st.session_state["reporte_imagen"], caption="Vista previa del reporte para compartir", use_container_width=True)
+
+    # Botón para descargar la imagen
+    st.download_button(
+        label="⬇️ Descargar Imagen del Reporte",
+        data=st.session_state["reporte_imagen"],
+        file_name="reporte_turno_rimo.png",
+        mime="image/png"
+    )
     
+    # Botón de WhatsApp (con CSS personalizado)
     st.markdown("---")
     st.subheader("📲 Compartir Reporte:")
     st.markdown(
         f'''
-        <a href="{whatsapp_url}" target="_blank">
-            <button style="
-                background-color: #25D366;
-                color: white;
-                border: none;
-                padding: 12px 24px;
-                font-size: 16px;
-                font-weight: bold;
-                border-radius: 8px;
-                cursor: pointer;
-                width: 100%;
-            ">
-                📲 Compartir Reporte por WhatsApp
-            </button>
-        </a>
+        <button style="
+            background-color: #25D366;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 16px;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            width: 100%;
+            text-align: center;
+            display: block;
+            margin-top: 10px;
+        " onclick="window.alert('Para compartir por WhatsApp:\\n1. Presiona el botón ⬇️ Descargar Imagen del Reporte.\\n2. Abre WhatsApp y envía la imagen descargada a tu grupo.')">
+            📲 Compartir Reporte por WhatsApp
+        </button>
         ''',
         unsafe_allow_html=True
     )
