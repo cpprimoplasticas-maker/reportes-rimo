@@ -3,3 +3,7 @@ google-genai
 pillow
 dataframe_image
 pillow
+streamlit
+google-genai
+pandas
+Pillow
