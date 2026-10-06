@@ -3,12 +3,11 @@ import pandas as pd
 from PIL import Image
 from google import genai
 import json
-import os
 
 st.set_page_config(page_title="Reportes RIMO", layout="wide")
 st.title("📋 Generador de Reportes de Turno con IA - RIMO")
 
-# Inicializar el cliente de Gemini API (utiliza GEMINI_API_KEY automáticamente)
+# Inicializar el cliente de la API de Gemini (utiliza GEMINI_API_KEY desde secretos/variables de entorno)
 client = genai.Client()
 
 # --- SECCIÓN 2: CARGA DE TABLERO Y ANÁLISIS ---
@@ -29,7 +28,7 @@ if foto_tablero:
     if st.button("🔍 Analizar Imagen con IA"):
         with st.spinner("Analizando tablero y extrayendo datos de máquinas..."):
             try:
-                # Prompt estructurado para forzar respuesta en JSON estricto
+                # Prompt estructurado para extraer información del tablero
                 prompt = """
                 Analiza detenidamente la imagen de este tablero de producción. 
                 Extrae la información relevante de cada máquina visible y responde EXCLUSIVAMENTE con un arreglo de objetos en formato JSON estricto sin markdown ni bloques de código adicionales.
@@ -46,13 +45,13 @@ if foto_tablero:
                 ]
                 """
 
-                # Llamada al modelo vision
+                # Llamada al modelo de visión actualizado gemini-3.8-flash
                 response = client.models.generate_content(
-                    model='gemini-2.5-flash',
+                    model='gemini-3.8-flash',
                     contents=[image, prompt]
                 )
 
-                # Limpieza por si la respuesta trae caracteres de formato markdown
+                # Limpieza de caracteres de formato markdown
                 raw_text = response.text.strip().replace("```json", "").replace("```", "")
                 datos = json.loads(raw_text)
 
@@ -82,23 +81,3 @@ novedades_mantenimiento = st.text_input("🔵 Novedades de Mantenimiento / Servi
 observaciones_generales = st.text_area("📝 Observaciones Generales del Turno:")
 
 # --- RESUMEN DE TEXTO LISTO PARA WHATSAPP ---
-if st.button("📱 Generar Texto Formateado para WhatsApp"):
-    texto_whatsapp = "*📋 REPORTE DE TURNO - RIMO*\n\n"
-    
-    if 'df_tablero' in st.session_state and not st.session_state['df_tablero'].empty:
-        texto_whatsapp += "*📊 MÁQUINAS EN TRABAJO:*\n"
-        for _, row in st.session_state['df_tablero'].iterrows():
-            texto_whatsapp += (
-                f"• *Máq:* {row.get('Maquina', '-')}\n"
-                f"  - *Artículo:* {row.get('Articulo', '-')}\n"
-                f"  - *Prog:* {row.get('Programadas', '-')}\n"
-                f"  - *Faltantes:* {row.get('Faltantes', '-')}\n"
-                f"  - *Rechazo:* {row.get('Rechazo', '-')}\n\n"
-            )
-    
-    texto_whatsapp += f"🔴 *Mantenimiento/Paradas:* {maquinas_paradas or 'Ninguna'}\n"
-    texto_whatsapp += f"🟠 *Novedades Calidad:* {novedades_calidad or 'Ninguna'}\n"
-    texto_whatsapp += f"🔵 *Servicios:* {novedades_mantenimiento or 'Ninguna'}\n"
-    texto_whatsapp += f"📝 *Obs:* {observaciones_generales or 'Sin observaciones'}\n"
-
-    st.text_area("Copia y pega este texto directo en WhatsApp:", value=texto_whatsapp, height=300)
