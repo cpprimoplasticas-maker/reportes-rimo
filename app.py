@@ -1,95 +1,163 @@
 import streamlit as st
 from google import genai
 from PIL import Image
+import urllib.parse
+import time
 
-# 1. Configuración de la página
-st.set_page_config(
-    page_title="Sistema de Reportes RIMO",
-    page_icon="📊",
-    layout="wide"
+st.set_page_config(page_title="Reporte de Turno RIMO", layout="wide")
+
+st.title("📋 Generador de Reportes de Turno - RIMO")
+
+# --- FUNCIONES DE UTILIDAD ---
+
+def optimizar_imagen(imagen_uploaded, max_size=(1024, 1024)):
+    """Reduce el tamaño de la imagen para ahorrar cuota de API."""
+    img = Image.open(imagen_uploaded)
+    img.thumbnail(max_size)
+    return img
+
+# --- INTERFAZ DE LA APP ---
+
+# 1. Cargar imagen desde cámara o galería
+st.subheader("1. Adjuntar Foto de Evidencia / Planilla")
+foto_galeria = st.file_uploader(
+    "Seleccionar foto desde la galería", 
+    type=["jpg", "jpeg", "png"]
 )
+foto_camara = st.camera_input("O tomar foto con la cámara del celular")
 
-# 2. Obtener la API Key desde los Secrets
-api_key = st.secrets.get("GEMINI_API_KEY")
+foto_final = foto_galeria if foto_galeria is not None else foto_camara
 
-if not api_key:
-    st.error("⚠️ No se encontró la 'GEMINI_API_KEY' en los Secrets de Streamlit. Por favor, asegúrate de configurarla en el panel de Streamlit Cloud.")
-    st.stop()
-
-# Inicializar cliente de Gemini
-client = genai.Client(api_key=api_key)
-
-# 3. Barra Lateral (Sidebar): Estado e Información de Mantenimiento
-with st.sidebar:
-    st.header("⚙️ Estado del Sistema")
-    st.success("🟢 API Conectada")
-    
-    st.markdown("---")
-    st.subheader("🛠️ Panel de Mantenimiento")
-    st.info("""
-    **Modo de operación:**
-    - Modelo Principal: `gemini-2.0-flash`
-    - Modelo Respaldos: `gemini-2.0-flash-lite`
-    
-    *En caso de saturación del servicio (Error 503), el sistema alternará automáticamente al modelo de respaldo.*
-    """)
-    
-    st.markdown("---")
-    st.caption("Sistema de Análisis y Reportes v2.0")
-
-# 4. Título Principal
-st.title("📊 Generador de Tablas de Reporte")
-st.write("Sube una imagen o documento para analizar y generar el reporte estructurado.")
-
-# 5. Función de generación con Fallback
-def generar_reporte_con_fallback(imagen, prompt_texto):
-    try:
-        # Intento con modelo principal
-        response = client.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=[prompt_texto, imagen]
-        )
-        return response.text
-    except Exception as e_principal:
-        st.warning("⚠️ El modelo principal se encuentra saturado. Intentando con el modelo de respaldo...")
-        try:
-            # Intento con modelo de respaldo
-            response = client.models.generate_content(
-                model='gemini-2.0-flash-lite',
-                contents=[prompt_texto, imagen]
-            )
-            return response.text
-        except Exception as e_fallback:
-            raise Exception(f"Error en ambos modelos: {e_fallback}")
-
-# 6. Área de Carga y Procesamiento
-col1, col2 = st.columns([1, 1])
+# 2. Formulario para novedades
+st.subheader("2. Registro de Novedades por Máquina")
+col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("1. Cargar Archivo")
-    uploaded_file = st.file_uploader("Elige una imagen (PNG, JPG, JPEG)", type=["jpg", "jpeg", "png"])
-    
-    prompt_input = st.text_area(
-        "Instrucciones para el reporte:", 
-        value="Analiza detalladamente la imagen adjunta y genera una tabla completa con los hallazgos, métricas y observaciones clave.",
-        height=120
+    maquinas_paradas = st.text_input(
+        "Máquinas Paradas / Fuera de Servicio:",
+        placeholder="Ejemplo: W320 (Daño en molde), T650 (Sin material)"
+    )
+    novedades_calidad = st.text_area(
+        "Novedades de Calidad / Rechazos:",
+        placeholder="Ejemplo: Rebabas en producto de máquina W880-2."
     )
 
-    if uploaded_file is not None:
-        imagen = Image.open(uploaded_file)
-        st.image(imagen, caption="Vista previa del archivo", use_container_width=True)
-
 with col2:
-    st.subheader("2. Resultado del Análisis")
+    novedades_mantenimiento = st.text_area(
+        "Novedades de Mantenimiento / Servicios:",
+        placeholder="Ejemplo: Fuga de aceite en unidad de inyección W1600."
+    )
+    observaciones_generales = st.text_area(
+        "Observaciones Generales del Turno:",
+        placeholder="Ejemplo: Cambio de turno realizado a tiempo."
+    )
+
+# 3. Procesar foto y generar reporte
+if foto_final:
+    st.image(foto_final, caption="Foto cargada", use_container_width=True)
     
-    if uploaded_file is not None:
-        if st.button("🚀 Generar Tabla de Reporte", type="primary", use_container_width=True):
-            with st.spinner("Procesando la imagen y generando la tabla..."):
-                try:
-                    resultado = generar_reporte_con_fallback(imagen, prompt_input)
-                    st.success("¡Reporte generado exitosamente!")
-                    st.markdown(resultado)
-                except Exception as err:
-                    st.error(f"Error durante el procesamiento: {err}")
-    else:
-        st.info("👈 Sube una imagen en el panel izquierdo para habilitar la generación.")
+    if st.button("🚀 Generar Tabla de Reporte", type="primary"):
+        with st.spinner("Analizando la imagen y procesando el reporte..."):
+            try:
+                imagen = optimizar_imagen(foto_final)
+                
+                api_key = st.secrets["GEMINI_API_KEY"]
+                client = genai.Client(api_key=api_key)
+                
+                novedades_texto = f"""
+                * Máquinas Paradas: {maquinas_paradas if maquinas_paradas else 'Ninguna'}
+                * Novedades de Calidad: {novedades_calidad if novedades_calidad else 'Sin novedades'}
+                * Novedades de Mantenimiento: {novedades_mantenimiento if novedades_mantenimiento else 'Sin novedades'}
+                * Observaciones Generales: {observaciones_generales if observaciones_generales else 'Sin observaciones'}
+                """
+                
+                prompt_reporte = f"""
+                Analiza la imagen adjunta (planilla/pantalla de producción) y compón un reporte de turno claro en texto plano/Markdown.
+
+                Usa esta estructura:
+                📌 *REPORTE DE TURNO - RIMO*
+
+                📊 *RESUMEN DE PRODUCCIÓN:*
+                (Genera la tabla con las columnas: Centro/Máquina, Orden, Referencia, Unds Producidas, Unds Programadas, Faltantes. Extrae TODOS los datos de la foto).
+
+                ⚠️ *NOVEDADES Y ESTADO DE MÁQUINAS:*
+                {novedades_texto}
+
+                🚨 *ALERTAS CRÍTICAS:*
+                (Identifica las 2 o 3 máquinas con mayor desfase o faltante según la foto).
+                """
+                
+                response = None
+                for intento in range(3):
+                    try:
+                        response = client.models.generate_content(
+                            model="gemini-3.8-flash",
+                            contents=[imagen, prompt_reporte]
+                        )
+                        break
+                    except Exception as err:
+                        if ("429" in str(err) or "RESOURCE_EXHAUSTED" in str(err)) and intento < 2:
+                            time.sleep(3 * (intento + 1))
+                        else:
+                            raise err
+                
+                if response:
+                    st.session_state["reporte_texto"] = response.text
+                    st.rerun()
+                
+            except Exception as e:
+                st.error(f"Ocurrió un error al procesar el reporte: {e}")
+
+# 4. Mostrar reporte generado en tarjeta HTML estilizada y WhatsApp
+if "reporte_texto" in st.session_state:
+    st.markdown("---")
+    st.subheader("📊 Reporte Final Generado:")
+    
+    # Renderizado dentro de una tarjeta HTML/CSS limpia
+    st.markdown(
+        f"""
+        <div style="
+            background-color: #FFFFFF; 
+            padding: 24px; 
+            border-radius: 12px; 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            color: #0F172A;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            border: 1px solid #E2E8F0;
+            margin-bottom: 20px;
+        ">
+            {st.session_state["reporte_texto"]}
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # Botón para compartir directo a WhatsApp
+    texto_encoded = urllib.parse.quote(st.session_state["reporte_texto"])
+    whatsapp_url = f"https://api.whatsapp.com/send?text={texto_encoded}"
+    
+    st.markdown("---")
+    st.subheader("📲 Compartir Reporte:")
+    st.markdown(
+        f'''
+        <a href="{whatsapp_url}" target="_blank" style="text-decoration: none;">
+            <button style="
+                background-color: #25D366;
+                color: white;
+                border: none;
+                padding: 14px 24px;
+                font-size: 16px;
+                font-weight: bold;
+                border-radius: 8px;
+                cursor: pointer;
+                width: 100%;
+                text-align: center;
+                display: block;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            ">
+                📲 Compartir Reporte por WhatsApp
+            </button>
+        </a>
+        ''',
+        unsafe_allow_html=True
+    )
