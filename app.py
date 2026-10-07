@@ -1,122 +1,167 @@
+# CONTEXTO DE DESARROLLO DE LA APP: REPORTES RIMO
+
+**Objetivo:** Crear una aplicación web con Streamlit (Python) que permita a los operadores de planta en "RIMO" generar reportes de turno automáticos.
+
+**Funcionalidad principal:**
+1. El usuario toma una foto de la pantalla o planilla de control de producción (donde se ven códigos de referencia, máquinas, unidades programadas, producidas, ciclos, etc.).
+2. El usuario llena opcionalmente casillas de novedades por máquina (máquinas paradas, calidad, mantenimiento).
+3. La app envía la foto y novedades a Gemini-3.8-Flash.
+4. Gemini extrae los datos de la foto, estructura una tabla detallada y compone un reporte de turno en texto Markdown.
+5. La app muestra el reporte y habilita un botón verde para "Compartir Reporte por WhatsApp", el cual abre WhatsApp con el texto pre-cargado.
+
+**Soluciones a Problemas Técnicos Implementadas:**
+- Se ha implementado una optimización de imagen (`imagen.thumbnail((1024, 1024))`) antes de enviarla a la API. Esto reduce el peso de las fotos de los celulares de ~10 MB a ~300 KB, ahorrando ancho de banda y cuota de la API.
+- Se ha implementado un bucle de reintentos con `time.sleep` si la API devuelve un error de alta demanda (429/RESOURCE_EXHAUSTED).
+
+---
+
+## CÓDIGO COMPLETO Y ACTUAL DE `app.py`:
+
+A continuación, el código que debe ir en el repositorio de GitHub:
+
+```python
 import streamlit as st
-import pandas as pd
-from PIL import Image
 from google import genai
-import json
+from PIL import Image
+import urllib.parse
 import time
 
-st.set_page_config(page_title="Reportes RIMO", layout="wide")
-st.title("📋 Generador de Reportes de Turno con IA - RIMO")
+st.set_page_config(page_title="Reporte de Turno RIMO", layout="wide")
 
-# Inicializar cliente de Gemini API
-client = genai.Client()
+st.title("📋 Generador de Reportes de Turno - RIMO")
 
-# Lista de modelos en orden de preferencia por si alguno está saturado (503)
-MODELOS_DISPONIBLES = [
-    'gemini-3.8-flash',
-    'gemini-2.5-flash',
-    'gemini-2.0-flash'
-]
-
-# --- SECCIÓN 2: CARGA DE TABLERO Y ANÁLISIS ---
-st.header("2. Registro de Novedades y Tablero de Producción")
-
-foto_tablero = st.file_uploader(
-    "📸 Subir foto del Tablero de Producción:",
-    type=["png", "jpg", "jpeg"]
+# 1. Cargar imagen desde cámara o galería
+st.subheader("1. Adjuntar Foto de Evidencia / Planilla")
+foto_galeria = st.file_uploader(
+    "Seleccionar foto desde la galería", 
+    type=["jpg", "jpeg", "png"]
 )
+foto_camara = st.camera_input("O tomar foto con la cámara del celular")
 
-df_resultado = None
+foto_final = foto_galeria if foto_galeria is not None else foto_camara
 
-if foto_tablero:
-    image = Image.open(foto_tablero)
-    st.image(image, caption="Imagen cargada del tablero", use_column_width=True)
+# 2. Formulario para novedades
+st.subheader("2. Registro de Novedades por Máquina")
+col1, col2 = st.columns(2)
 
-    if st.button("🔍 Analizar Imagen con IA"):
-        with st.spinner("Analizando tablero y extrayendo datos de máquinas..."):
-            prompt = """
-            Analiza detenidamente la imagen de este tablero de producción. 
-            Extrae la información relevante de cada máquina visible y responde EXCLUSIVAMENTE con un arreglo de objetos en formato JSON estricto sin markdown ni bloques de código adicionales.
-            
-            Estructura por cada máquina:
-            [
-              {
-                "Maquina": "Nombre o número de la máquina",
-                "Articulo": "Nombre o referencia del artículo/producto",
-                "Programadas": "Unidades programadas (número o N/A)",
-                "Faltantes": "Unidades faltantes (número o N/A)",
-                "Rechazo": "Cantidad o porcentaje de rechazo (número o N/A)"
-              }
-            ]
-            """
+with col1:
+    maquinas_paradas = st.text_input(
+        "Máquinas Paradas / Fuera de Servicio:",
+        placeholder="Ejemplo: W320 (Daño en molde), T650 (Sin material)"
+    )
+    novedades_calidad = st.text_area(
+        "Novedades de Calidad / Rechazos:",
+        placeholder="Ejemplo: Rebabas en producto de máquina W880-2."
+    )
 
-            exito = False
-            error_msg = ""
+with col2:
+    novedades_mantenimiento = st.text_area(
+        "Novedades de Mantenimiento / Servicios:",
+        placeholder="Ejemplo: Fuga de aceite en unidad de inyección W1600."
+    )
+    observaciones_generales = st.text_area(
+        "Observaciones Generales del Turno:",
+        placeholder="Ejemplo: Cambio de turno realizado a tiempo."
+    )
 
-            # Probar modelos disponibles en caso de saturación 503
-            for modelo in MODELOS_DISPONIBLES:
-                for intento in range(2):  # Reintentar hasta 2 veces por modelo
+# 3. Procesar foto y generar reporte
+if foto_final:
+    st.image(foto_final, caption="Foto cargada", use_container_width=True)
+    
+    if st.button("🚀 Generar Tabla de Reporte", type="primary"):
+        with st.spinner("Analizando la imagen y procesando el reporte..."):
+            try:
+                # 🔹 OPTIMIZACIÓN DE LA IMAGEN: Reducir peso antes de enviar a Gemini
+                imagen = Image.open(foto_final)
+                imagen.thumbnail((1024, 1024)) # Escalar a max 1024px, reduce a ~300KB
+                
+                api_key = st.secrets["GEMINI_API_KEY"]
+                client = genai.Client(api_key=api_key)
+                
+                novedades_texto = f"""
+                * Máquinas Paradas: {maquinas_paradas if maquinas_paradas else 'Ninguna'}
+                * Novedades de Calidad: {novedades_calidad if novedades_calidad else 'Sin novedades'}
+                * Novedades de Mantenimiento: {novedades_mantenimiento if novedades_mantenimiento else 'Sin novedades'}
+                * Observaciones Generales: {observaciones_generales if observaciones_generales else 'Sin observaciones'}
+                """
+                
+                prompt_reporte = f"""
+                Analiza la imagen adjunta (planilla/pantalla de producción) y compón un reporte de turno claro en texto plano/Markdown.
+
+                Usa esta estructura:
+                📌 *REPORTE DE TURNO - RIMO*
+
+                📊 *RESUMEN DE PRODUCCIÓN:*
+                (Genera la tabla con las columnas: Centro/Máquina, Orden, Referencia, Unds Producidas, Unds Programadas, Faltantes. Extrae TODOS los datos de la foto).
+
+                ⚠️ *NOVEDADES Y ESTADO DE MÁQUINAS:*
+                {novedades_texto}
+
+                🚨 *ALERTAS CRÍTICAS:*
+                (Identifica las 2 o 3 máquinas con mayor desfase o faltante según la foto).
+                """
+                
+                # 🔹 BUCLE DE REINTENTOS PARA EVITAR ERRORES DE ALTA DEMANDA (429)
+                response = None
+                for intento in range(3):
                     try:
                         response = client.models.generate_content(
-                            model=modelo,
-                            contents=[image, prompt]
+                            model="gemini-3.8-flash",
+                            contents=[imagen, prompt_reporte]
                         )
-
-                        # Limpieza del texto JSON
-                        raw_text = response.text.strip().replace("```json", "").replace("```", "")
-                        datos = json.loads(raw_text)
-
-                        # Convertir a DataFrame de Pandas
-                        df_resultado = pd.DataFrame(datos)
-                        st.session_state['df_tablero'] = df_resultado
-                        st.success(f"¡Análisis completado con éxito (usando {modelo})!")
-                        exito = True
-                        break
-                    except Exception as e:
-                        error_msg = str(e)
-                        time.sleep(1) # Esperar 1 segundo antes de reintentar
+                        break # Si funciona, salir del bucle
+                    except Exception as err:
+                        err_msg = str(err)
+                        # Si es error de cuota o saturación, esperar y reintentar
+                        if ("429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg) and intento < 2:
+                            time.sleep(3 * (intento + 1))  # Espera exponencial: 3s, luego 6s
+                        else:
+                            raise err # Si es otro error o agostamos intentos, lanzar error
                 
-                if exito:
-                    break
+                if response:
+                    # Guardar el resultado en la sesión para que persista
+                    st.session_state["reporte_texto"] = response.text
+                
+            except Exception as e:
+                err_str = str(e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    st.warning("⚠️ Servidores muy ocupados. Espera 30 segundos e intenta de nuevo el botón.")
+                else:
+                    st.error(f"Ocurrió un error al procesar el reporte: {e}")
 
-            if not exito:
-                st.error(f"Los servidores están saturados temporalmente. Intenta nuevamente en 30 segundos. Detalle: {error_msg}")
-
-# Mostrar y permitir editar los datos extraídos
-if 'df_tablero' in st.session_state and st.session_state['df_tablero'] is not None:
-    st.subheader("📊 Resumen Extraído de Máquinas en Operación")
-    st.info("Puedes editar los campos de la tabla directamente si deseas corregir algún número.")
+# 4. Mostrar reporte generado y botón de compartir por WhatsApp
+if "reporte_texto" in st.session_state:
+    st.markdown("---")
+    st.subheader("📊 Reporte Final Generado:")
+    st.markdown(st.session_state["reporte_texto"])
     
-    # Renderizar tabla editable
-    df_editado = st.data_editor(st.session_state['df_tablero'], use_container_width=True)
-    st.session_state['df_tablero'] = df_editado
-
-st.markdown("---")
-
-# --- NOVEDADES MANUALES ---
-maquinas_paradas = st.text_input("🔴 Máquinas Paradas / Fuera de Servicio:")
-novedades_calidad = st.text_input("🟠 Novedades de Calidad / Rechazos:")
-novedades_mantenimiento = st.text_input("🔵 Novedades de Mantenimiento / Servicios:")
-observaciones_generales = st.text_area("📝 Observaciones Generales del Turno:")
-
-# --- RESUMEN DE TEXTO LISTO PARA WHATSAPP ---
-if st.button("📱 Generar Texto Formateado para WhatsApp"):
-    texto_whatsapp = "*📋 REPORTE DE TURNO - RIMO*\n\n"
+    # Preparar el enlace de WhatsApp con el texto codificado
+    texto_encoded = urllib.parse.quote(st.session_state["reporte_texto"])
+    whatsapp_url = f"[https://api.whatsapp.com/send?text=](https://api.whatsapp.com/send?text=){texto_encoded}"
     
-    if 'df_tablero' in st.session_state and not st.session_state['df_tablero'].empty:
-        texto_whatsapp += "*📊 MÁQUINAS EN TRABAJO:*\n"
-        for _, row in st.session_state['df_tablero'].iterrows():
-            texto_whatsapp += (
-                f"• *Máq:* {row.get('Maquina', '-')}\n"
-                f"  - *Artículo:* {row.get('Articulo', '-')}\n"
-                f"  - *Prog:* {row.get('Programadas', '-')}\n"
-                f"  - *Faltantes:* {row.get('Faltantes', '-')}\n"
-                f"  - *Rechazo:* {row.get('Rechazo', '-')}\n\n"
-            )
-    
-    texto_whatsapp += f"🔴 *Mantenimiento/Paradas:* {maquinas_paradas or 'Ninguna'}\n"
-    texto_whatsapp += f"🟠 *Novedades Calidad:* {novedades_calidad or 'Ninguna'}\n"
-    texto_whatsapp += f"🔵 *Servicios:* {novedades_mantenimiento or 'Ninguna'}\n"
-    texto_whatsapp += f"📝 *Obs:* {observaciones_generales or 'Sin observaciones'}\n"
-
-    st.text_area("Copia y pega este texto directo en WhatsApp:", value=texto_whatsapp, height=300)
+    # Botón verde de WhatsApp con CSS personalizado
+    st.markdown("---")
+    st.subheader("📲 Compartir Reporte:")
+    st.markdown(
+        f'''
+        <a href="{whatsapp_url}" target="_blank">
+            <button style="
+                background-color: #25D366;
+                color: white;
+                border: none;
+                padding: 12px 24px;
+                font-size: 16px;
+                font-weight: bold;
+                border-radius: 8px;
+                cursor: pointer;
+                width: 100%;
+                text-align: center;
+                display: block;
+                margin-top: 10px;
+            ">
+                📲 Compartir Reporte por WhatsApp
+            </button>
+        </a>
+        ''',
+        unsafe_allow_html=True
+    )
